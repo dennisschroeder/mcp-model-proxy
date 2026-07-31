@@ -13,11 +13,11 @@ type ToolChecker struct {
 
 // Tool represents a CLI tool and how to check it
 type Tool struct {
-	Name        string
-	BinaryName  string
-	VersionCmd  []string // command to check version/availability
-	Installation string  // installation instructions
-	IsAvailable bool
+	Name         string
+	BinaryName   string
+	VersionCmd   []string // command to check version/availability
+	Installation string   // installation instructions
+	IsAvailable  bool
 }
 
 // NewToolChecker creates a new tool checker
@@ -45,13 +45,28 @@ Then set: export OPENAI_API_KEY=sk-...`,
 			},
 			"antigravity": {
 				Name:       "Antigravity CLI",
-				BinaryName: "antigravity-cli",
-				VersionCmd: []string{"antigravity-cli", "--version"},
+				BinaryName: "agy",
+				VersionCmd: []string{"agy", "--version"},
 				Installation: `Install Antigravity CLI:
   macOS: brew install antigravity-cli
-  Linux: apt-get install antigravity-cli
-  Windows: choco install antigravity-cli
-Then authenticate: antigravity-cli auth login`,
+Then run: agy install
+(installs as the "agy" binary, not "antigravity-cli")`,
+			},
+			"claude": {
+				Name:       "Claude CLI",
+				BinaryName: "claude",
+				VersionCmd: []string{"claude", "--version"},
+				Installation: `Install Claude CLI:
+  npm install -g @anthropic-ai/claude-code
+Then run: claude (to authenticate interactively)`,
+			},
+			"codex": {
+				Name:       "Codex CLI",
+				BinaryName: "codex",
+				VersionCmd: []string{"codex", "--version"},
+				Installation: `Install Codex CLI:
+  macOS: brew install --cask codex
+Then run: codex login`,
 			},
 		},
 	}
@@ -88,10 +103,27 @@ func (tc *ToolChecker) checkTool(tool *Tool) error {
 	return nil
 }
 
-// IsAvailable checks if a tool is available
+// IsAvailable runs a live check for whether a tool is installed and in PATH.
+// checkDependency calls this lazily (per the "validate on invocation, not on
+// startup" design), so it can't rely on ValidateAll() having run first.
 func (tc *ToolChecker) IsAvailable(name string) bool {
-	if tool, ok := tc.tools[name]; ok {
-		return tool.IsAvailable
+	tool, ok := tc.tools[name]
+	if !ok {
+		return false
 	}
-	return false
+	if err := tc.checkTool(tool); err != nil {
+		return false
+	}
+	tool.IsAvailable = true
+	return true
+}
+
+// UnavailableMessage returns a user-facing "not available" message with
+// install instructions for a tool, keyed by its BinaryName-derived key.
+func (tc *ToolChecker) UnavailableMessage(name string) string {
+	tool, ok := tc.tools[name]
+	if !ok {
+		return fmt.Sprintf("%s not available (no installation info known)", name)
+	}
+	return fmt.Sprintf("%s not available.\n\n%s", tool.Name, tool.Installation)
 }
