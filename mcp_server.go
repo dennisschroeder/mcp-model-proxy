@@ -146,6 +146,8 @@ func (s *MCPServer) callModel(message string) (string, error) {
 		return s.callChatGPT(message)
 	case "gemini":
 		return s.callGemini(message)
+	case "antigravity":
+		return s.callAntigravity(message)
 	default:
 		return "", fmt.Errorf("unknown model: %s", s.model)
 	}
@@ -197,6 +199,25 @@ func (s *MCPServer) callGemini(message string) (string, error) {
 			return "", fmt.Errorf("gcloud authentication failed. Run: gcloud auth application-default login")
 		}
 		return "", fmt.Errorf("Gemini call failed: %w\nOutput: %s", err, outputStr)
+	}
+
+	return string(output), nil
+}
+
+// callAntigravity sends a message to Antigravity CLI (test provider)
+func (s *MCPServer) callAntigravity(message string) (string, error) {
+	if !s.checker.IsAvailable("antigravity") {
+		return "", fmt.Errorf("Antigravity CLI not available. Install with: brew install antigravity-cli")
+	}
+
+	cmd := exec.Command("antigravity-cli", "ask", message)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		outputStr := string(output)
+		if strings.Contains(outputStr, "authentication") || strings.Contains(outputStr, "credentials") {
+			return "", fmt.Errorf("Antigravity authentication failed. Run: antigravity-cli auth login")
+		}
+		return "", fmt.Errorf("Antigravity call failed: %w\nOutput: %s", err, outputStr)
 	}
 
 	return string(output), nil

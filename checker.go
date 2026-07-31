@@ -43,6 +43,16 @@ Then run: gcloud auth application-default login`,
   Windows: pip install openai
 Then set: export OPENAI_API_KEY=sk-...`,
 			},
+			"antigravity": {
+				Name:       "Antigravity CLI",
+				BinaryName: "antigravity-cli",
+				VersionCmd: []string{"antigravity-cli", "--version"},
+				Installation: `Install Antigravity CLI:
+  macOS: brew install antigravity-cli
+  Linux: apt-get install antigravity-cli
+  Windows: choco install antigravity-cli
+Then authenticate: antigravity-cli auth login`,
+			},
 		},
 	}
 }
