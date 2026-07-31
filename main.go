@@ -8,12 +8,10 @@ import (
 func main() {
 	checker := NewToolChecker()
 
-	if err := checker.ValidateAll(); err != nil {
-		log.Fatalf("Dependency check failed:\n%v", err)
-	}
-
-	log.Println("✓ All dependencies validated")
+	// Create server without validating all dependencies upfront
+	// Validation happens lazily when a model is invoked
 	log.Println("Starting MCP server...")
+	log.Println("(Dependencies will be validated when models are used)")
 
 	server := NewMCPServer(checker)
 	if err := server.Run(context.Background()); err != nil {
