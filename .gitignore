@@ -1,0 +1,10 @@
+mcp-model-proxy
+*.o
+*.a
+*.so
+.DS_Store
+*.swp
+*.swo
+*~
+.env
+.env.local
