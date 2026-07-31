@@ -11,10 +11,10 @@ import (
 	"strings"
 )
 
-// MCPServer handles MCP protocol communication
+// MCPServer handles MCP protocol communication with proper tool registration
 type MCPServer struct {
 	checker *ToolChecker
-	model   string // selected model (chatgpt, gemini)
+	model   string // selected model (chatgpt, gemini, antigravity)
 }
 
 // MCPMessage represents a message in the MCP protocol
@@ -27,6 +27,13 @@ type MCPMessage struct {
 	Error   interface{}     `json:"error,omitempty"`
 }
 
+// MCPTool represents an MCP tool definition
+type MCPTool struct {
+	Name        string                 `json:"name"`
+	Description string                 `json:"description"`
+	InputSchema map[string]interface{} `json:"inputSchema"`
+}
+
 // TextContent represents text content in MCP
 type TextContent struct {
 	Type string `json:"type"`
@@ -35,7 +42,6 @@ type TextContent struct {
 
 // NewMCPServer creates a new MCP server
 func NewMCPServer(checker *ToolChecker) *MCPServer {
-	// Default to chatgpt, can be overridden by environment or parameters
 	model := os.Getenv("MCP_MODEL")
 	if model == "" {
 		model = "chatgpt"
@@ -66,6 +72,8 @@ func (s *MCPServer) Run(ctx context.Context) error {
 		switch msg.Method {
 		case "initialize":
 			s.handleInitialize(encoder, msg.ID)
+		case "tools/list":
+			s.handleListTools(encoder, msg.ID)
 		case "tools/call":
 			s.handleToolCall(encoder, msg.ID, msg.Params)
 		default:
@@ -80,7 +88,7 @@ func (s *MCPServer) Run(ctx context.Context) error {
 	return nil
 }
 
-// handleInitialize responds to initialization
+// handleInitialize responds to initialization with proper capabilities
 func (s *MCPServer) handleInitialize(encoder *json.Encoder, id int) {
 	response := MCPMessage{
 		JSONRPC: "2.0",
@@ -92,8 +100,37 @@ func (s *MCPServer) handleInitialize(encoder *json.Encoder, id int) {
 			},
 			"serverInfo": map[string]interface{}{
 				"name":    "mcp-model-proxy",
-				"version": "0.1.0",
+				"version": "0.2.0",
 			},
+		},
+	}
+	encoder.Encode(response)
+}
+
+// handleListTools returns available tools
+func (s *MCPServer) handleListTools(encoder *json.Encoder, id int) {
+	tools := []MCPTool{
+		{
+			Name:        "ask_model",
+			Description: fmt.Sprintf("Send a message to the %s model and get a response", s.model),
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"message": map[string]interface{}{
+						"type":        "string",
+						"description": "The message to send to the model",
+					},
+				},
+				"required": []string{"message"},
+			},
+		},
+	}
+
+	response := MCPMessage{
+		JSONRPC: "2.0",
+		ID:      id,
+		Result: map[string]interface{}{
+			"tools": tools,
 		},
 	}
 	encoder.Encode(response)
@@ -102,7 +139,7 @@ func (s *MCPServer) handleInitialize(encoder *json.Encoder, id int) {
 // handleToolCall processes tool calls from Claude
 func (s *MCPServer) handleToolCall(encoder *json.Encoder, id int, params json.RawMessage) {
 	var callParams struct {
-		Name      string `json:"name"`
+		Name      string                 `json:"name"`
 		Arguments map[string]interface{} `json:"arguments"`
 	}
 
@@ -111,19 +148,36 @@ func (s *MCPServer) handleToolCall(encoder *json.Encoder, id int, params json.Ra
 		return
 	}
 
-	// For now, treat all tool calls as "send message" requests
-	userMessage, ok := callParams.Arguments["message"].(string)
-	if !ok {
-		s.sendError(encoder, id, "Missing message", fmt.Errorf("message argument required"))
+	switch callParams.Name {
+	case "ask_model":
+		s.handleAskModel(encoder, id, callParams.Arguments)
+	default:
+		s.sendError(encoder, id, "Unknown tool", fmt.Errorf("tool %s not found", callParams.Name))
+	}
+}
+
+// handleAskModel processes model queries with lazy dependency checking
+func (s *MCPServer) handleAskModel(encoder *json.Encoder, id int, args map[string]interface{}) {
+	message, ok := args["message"].(string)
+	if !ok || message == "" {
+		s.sendError(encoder, id, "Invalid argument", fmt.Errorf("message required and must be a non-empty string"))
 		return
 	}
 
-	response, err := s.callModel(userMessage)
+	// Lazy dependency check — only when model is actually invoked
+	if err := s.checkDependency(s.model); err != nil {
+		s.sendError(encoder, id, "Dependency error", err)
+		return
+	}
+
+	// Call the model
+	response, err := s.callModel(message)
 	if err != nil {
-		s.sendError(encoder, id, "Model error", err)
+		s.sendError(encoder, id, "Model call failed", err)
 		return
 	}
 
+	// Success response with proper MCP format
 	result := MCPMessage{
 		JSONRPC: "2.0",
 		ID:      id,
@@ -137,6 +191,27 @@ func (s *MCPServer) handleToolCall(encoder *json.Encoder, id int, params json.Ra
 		},
 	}
 	encoder.Encode(result)
+}
+
+// checkDependency validates a specific model's dependencies
+func (s *MCPServer) checkDependency(model string) error {
+	switch strings.ToLower(model) {
+	case "chatgpt":
+		if !s.checker.IsAvailable("openai") {
+			return fmt.Errorf("OpenAI CLI not available.\n\nInstall with:\n  pip install openai\n\nThen set your API key:\n  export OPENAI_API_KEY=sk-...")
+		}
+	case "gemini":
+		if !s.checker.IsAvailable("gcloud") {
+			return fmt.Errorf("Google Cloud CLI not available.\n\nInstall with:\n  brew install google-cloud-sdk\n\nThen authenticate:\n  gcloud auth application-default login")
+		}
+	case "antigravity":
+		if !s.checker.IsAvailable("antigravity") {
+			return fmt.Errorf("Antigravity CLI not available.\n\nInstall with:\n  brew install antigravity-cli\n\nThen authenticate:\n  antigravity-cli auth login")
+		}
+	default:
+		return fmt.Errorf("unknown model: %s", model)
+	}
+	return nil
 }
 
 // callModel routes the message to the selected model provider
@@ -155,23 +230,16 @@ func (s *MCPServer) callModel(message string) (string, error) {
 
 // callChatGPT sends a message to OpenAI's ChatGPT via openai CLI
 func (s *MCPServer) callChatGPT(message string) (string, error) {
-	if !s.checker.IsAvailable("openai") {
-		return "", fmt.Errorf("OpenAI CLI not available. Install with: pip install openai")
-	}
-
-	// Using openai CLI with the api command
-	// Format: echo "message" | openai api chat_completions.create -m gpt-4 -t 0.7
 	cmd := exec.Command("bash", "-c",
 		fmt.Sprintf(`echo %q | openai api chat_completions.create -m gpt-4 -t 0.7`, message))
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		// Check if it's an auth error
 		outputStr := string(output)
 		if strings.Contains(outputStr, "OPENAI_API_KEY") || strings.Contains(outputStr, "authentication") {
-			return "", fmt.Errorf("OpenAI authentication failed. Set: export OPENAI_API_KEY=sk-...")
+			return "", fmt.Errorf("Authentication failed: OPENAI_API_KEY not set or invalid")
 		}
-		return "", fmt.Errorf("ChatGPT call failed: %w\nOutput: %s", err, outputStr)
+		return "", fmt.Errorf("ChatGPT call failed: %w", err)
 	}
 
 	return string(output), nil
@@ -179,12 +247,6 @@ func (s *MCPServer) callChatGPT(message string) (string, error) {
 
 // callGemini sends a message to Google's Gemini via gcloud CLI
 func (s *MCPServer) callGemini(message string) (string, error) {
-	if !s.checker.IsAvailable("gcloud") {
-		return "", fmt.Errorf("gcloud CLI not available. Install with: brew install google-cloud-sdk")
-	}
-
-	// Using gcloud's Vertex AI API for Gemini
-	// Format: gcloud beta ai models predict --model=gemini-pro --region=us-central1 --input="message"
 	cmd := exec.Command("gcloud", "beta", "ai", "models", "predict",
 		"--model=gemini-pro",
 		"--region=us-central1",
@@ -193,12 +255,7 @@ func (s *MCPServer) callGemini(message string) (string, error) {
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		// Check if it's an auth error
-		outputStr := string(output)
-		if strings.Contains(outputStr, "authentication") || strings.Contains(outputStr, "credentials") {
-			return "", fmt.Errorf("gcloud authentication failed. Run: gcloud auth application-default login")
-		}
-		return "", fmt.Errorf("Gemini call failed: %w\nOutput: %s", err, outputStr)
+		return "", fmt.Errorf("Gemini call failed: %w", err)
 	}
 
 	return string(output), nil
@@ -206,34 +263,23 @@ func (s *MCPServer) callGemini(message string) (string, error) {
 
 // callAntigravity sends a message to Antigravity CLI (test provider)
 func (s *MCPServer) callAntigravity(message string) (string, error) {
-	if !s.checker.IsAvailable("antigravity") {
-		return "", fmt.Errorf("Antigravity CLI not available. Install with: brew install antigravity-cli")
-	}
-
 	cmd := exec.Command("antigravity-cli", "ask", message)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		outputStr := string(output)
-		if strings.Contains(outputStr, "authentication") || strings.Contains(outputStr, "credentials") {
-			return "", fmt.Errorf("Antigravity authentication failed. Run: antigravity-cli auth login")
-		}
-		return "", fmt.Errorf("Antigravity call failed: %w\nOutput: %s", err, outputStr)
+		return "", fmt.Errorf("Antigravity call failed: %w", err)
 	}
 
 	return string(output), nil
 }
 
-// sendError sends an error response
-func (s *MCPServer) sendError(encoder *json.Encoder, id int, message string, err error) {
+// sendError sends a properly formatted MCP error response
+func (s *MCPServer) sendError(encoder *json.Encoder, id int, code string, err error) {
 	response := MCPMessage{
 		JSONRPC: "2.0",
 		ID:      id,
 		Error: map[string]interface{}{
-			"code":    -1,
-			"message": message,
-			"data": map[string]interface{}{
-				"detail": err.Error(),
-			},
+			"code":    code,
+			"message": err.Error(),
 		},
 	}
 	encoder.Encode(response)
