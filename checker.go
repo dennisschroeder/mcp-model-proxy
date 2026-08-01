@@ -23,25 +23,6 @@ type Tool struct {
 func NewToolChecker() *ToolChecker {
 	return &ToolChecker{
 		tools: map[string]*Tool{
-			"gcloud": {
-				Name:       "Google Cloud CLI",
-				BinaryName: "gcloud",
-				VersionCmd: []string{"gcloud", "version"},
-				Installation: `Install gcloud CLI:
-  macOS: brew install google-cloud-sdk
-  Linux: https://cloud.google.com/sdk/docs/install
-  Windows: https://cloud.google.com/sdk/docs/install
-Then run: gcloud auth application-default login`,
-			},
-			"openai": {
-				Name:       "OpenAI CLI",
-				BinaryName: "openai",
-				VersionCmd: []string{"openai", "--version"},
-				Installation: `Install OpenAI CLI:
-  macOS/Linux: pip install openai
-  Windows: pip install openai
-Then set: export OPENAI_API_KEY=sk-...`,
-			},
 			"antigravity": {
 				Name:       "Antigravity CLI",
 				BinaryName: "agy",

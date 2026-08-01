@@ -8,9 +8,9 @@ It's a dumb proxy by design: it doesn't inspect or rewrite the message you send 
 
 `list_models` reports, live, which models this proxy can currently reach — grouped by provider, with each model's availability determined by whether its underlying CLI tool is installed and authenticated:
 
-- **Google** — Gemini models (via `gcloud`), plus whatever models the Antigravity CLI (`agy`) itself reports (`agy models`)
+- **Google** — whatever models the Antigravity CLI (`agy`) reports (`agy models`), including Gemini models
 - **Anthropic** — Claude models: `sonnet`, `opus`, `fable` (via the `claude` CLI)
-- **OpenAI** — GPT models (via the `openai` CLI), plus Codex's own model (via the `codex` CLI)
+- **OpenAI** — Codex's own model (via the `codex` CLI)
 
 ## Prerequisites
 
@@ -49,14 +49,14 @@ Add an entry to Claude Desktop's `claude_desktop_config.json` (or Claude Code's 
     "mcp-model-proxy": {
       "command": "/absolute/path/to/mcp-model-proxy",
       "env": {
-        "DEFAULT_PROVIDER_MODEL": "openai/gpt-4"
+        "DEFAULT_PROVIDER_MODEL": "anthropic/sonnet"
       }
     }
   }
 }
 ```
 
-`DEFAULT_PROVIDER_MODEL` sets the default model used when `ask_model` is called without an explicit `model`/`provider`. Syntax: `provider/model` (e.g. `google/gemini-3.6-flash-high`, `anthropic/sonnet`, `openai/gpt-4`) — see `list_models` for the exact provider and model names currently available. It's optional; it defaults to `openai/gpt-4`. Any call can override it per-request regardless (see below), so this only matters if you want a different default.
+`DEFAULT_PROVIDER_MODEL` sets the default model used when `ask_model` is called without an explicit `model`/`provider`. Syntax: `provider/model` (e.g. `google/gemini-3.6-flash-high`, `anthropic/sonnet`, `openai/gpt-5.6-sol`) — see `list_models` for the exact provider and model names currently available. It's optional; it defaults to `openai/gpt-5.6-sol` (Codex). Any call can override it per-request regardless (see below), so this only matters if you want a different default.
 
 Restart Claude Desktop/Code after editing the config.
 

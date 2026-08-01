@@ -20,13 +20,10 @@ type MCPServer struct {
 	server          *mcp.Server
 }
 
-// Model names for the single-model direct routes, defined once so their
-// call* functions and handleListModels/availableModels can't drift apart.
-const (
-	chatGPTModel = "gpt-4"
-	geminiModel  = "gemini-pro"
-	codexModel   = "gpt-5.6-sol" // codex's own current default, per `codex exec` with no --model flag
-)
+// codexModel is codex's own current default, per `codex exec` with no
+// --model flag. Defined once so callCodex and handleListModels/
+// availableModels can't drift apart.
+const codexModel = "gpt-5.6-sol"
 
 // claudeModels are the model aliases the claude CLI's --model flag accepts.
 // claudeModels[0] is the default used when a call doesn't override the model.
@@ -65,10 +62,10 @@ func (s *MCPServer) Run(ctx context.Context) error {
 // same (model, provider) shape resolveModel already expects. A value with no
 // "/" is treated as a model name with no provider constraint — the same
 // leniency ask_model's own optional provider argument has. Unset falls back
-// to openai/gpt-4.
+// to openai/<codexModel>.
 func parseDefaultProviderModel(val string) (model, provider string) {
 	if val == "" {
-		return chatGPTModel, "openai"
+		return codexModel, "openai"
 	}
 	provider, model, found := strings.Cut(val, "/")
 	if !found {
@@ -90,7 +87,7 @@ func defaultModelLabel(provider, model string) string {
 // these fields (required unless the json tag has omitempty).
 type AskModelInput struct {
 	Message  string `json:"message" jsonschema:"the message to send to the model"`
-	Model    string `json:"model,omitempty" jsonschema:"optional: a specific model name from list_models (e.g. gemini-3.6-flash-high, claude-sonnet-4-6, gpt-4); determines routing automatically; omit to use the configured default route"`
+	Model    string `json:"model,omitempty" jsonschema:"optional: a specific model name from list_models (e.g. gemini-3.6-flash-high, claude-sonnet-4-6, gpt-5.6-sol); determines routing automatically; omit to use the configured default route"`
 	Provider string `json:"provider,omitempty" jsonschema:"optional cross-check: the provider (e.g. Google, OpenAI) the given model must belong to; requires model to also be set"`
 }
 
@@ -192,8 +189,6 @@ type routeModel struct {
 // is Google's CLI, so every model `agy models` returns is listed under
 // Google, whatever the individual model names look like.
 var routeProvider = map[string]string{
-	"chatgpt":     "OpenAI",
-	"gemini":      "Google",
 	"antigravity": "Google",
 	"claude":      "Anthropic",
 	"codex":       "OpenAI",
@@ -204,17 +199,6 @@ var routeProvider = map[string]string{
 // askModelOverride so both resolve models against the same catalog.
 func (s *MCPServer) availableModels() []routeModel {
 	var found []routeModel
-
-	found = append(found, routeModel{
-		name:      chatGPTModel,
-		route:     "chatgpt",
-		available: s.checker.IsAvailable(routes["chatgpt"].tool),
-	})
-	found = append(found, routeModel{
-		name:      geminiModel,
-		route:     "gemini",
-		available: s.checker.IsAvailable(routes["gemini"].tool),
-	})
 
 	if s.checker.IsAvailable(routes["antigravity"].tool) {
 		if out, err := s.listAntigravityModels(); err == nil {
@@ -273,54 +257,20 @@ func formatModelsByProvider(found []routeModel) string {
 
 // routeInfo pairs a route's required CLI tool key (checker.go looks up
 // install instructions by this key) with its dispatch function. A route is
-// a CLI tool this proxy talks to (chatgpt→openai, gemini→gcloud,
-// antigravity→agy) — NOT itself a provider name (see routeProvider). This
-// is the single source of truth for which routes exist — availableModels
-// and askModelOverride both derive from it.
+// a CLI tool this proxy talks to (antigravity→agy, claude→claude,
+// codex→codex) — NOT itself a provider name (see routeProvider): antigravity
+// is Google's CLI, not a provider called "Antigravity". This is the single
+// source of truth for which routes exist — availableModels and
+// askModelOverride both derive from it.
 type routeInfo struct {
 	tool string
 	call func(*MCPServer, string) (string, error)
 }
 
 var routes = map[string]routeInfo{
-	"chatgpt":     {tool: "openai", call: (*MCPServer).callChatGPT},
-	"gemini":      {tool: "gcloud", call: (*MCPServer).callGemini},
 	"antigravity": {tool: "antigravity", call: (*MCPServer).callAntigravity},
 	"claude":      {tool: "claude", call: (*MCPServer).callClaude},
 	"codex":       {tool: "codex", call: (*MCPServer).callCodex},
-}
-
-// callChatGPT sends a message to OpenAI's ChatGPT via openai CLI
-func (s *MCPServer) callChatGPT(message string) (string, error) {
-	cmd := exec.Command("bash", "-c",
-		fmt.Sprintf(`echo %q | openai api chat_completions.create -m %s -t 0.7`, message, chatGPTModel))
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		outputStr := string(output)
-		if strings.Contains(outputStr, "OPENAI_API_KEY") || strings.Contains(outputStr, "authentication") {
-			return "", fmt.Errorf("authentication failed: OPENAI_API_KEY not set or invalid")
-		}
-		return "", fmt.Errorf("chatgpt call failed: %w", err)
-	}
-
-	return string(output), nil
-}
-
-// callGemini sends a message to Google's Gemini via gcloud CLI
-func (s *MCPServer) callGemini(message string) (string, error) {
-	cmd := exec.Command("gcloud", "beta", "ai", "models", "predict",
-		"--model="+geminiModel,
-		"--region=us-central1",
-		fmt.Sprintf("--input=%s", message),
-	)
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("gemini call failed: %w", err)
-	}
-
-	return string(output), nil
 }
 
 // callAntigravity sends a message to Antigravity CLI (test provider)

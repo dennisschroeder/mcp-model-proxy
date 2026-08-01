@@ -7,7 +7,7 @@ import (
 
 func TestResolveModel(t *testing.T) {
 	available := []routeModel{
-		{name: "gpt-4", route: "chatgpt", available: false},
+		{name: "gpt-5.6-sol", route: "codex", available: false},
 		{name: "gemini-3.6-flash-high", route: "antigravity", available: true},
 		{name: "sonnet", route: "claude", available: true},
 	}
@@ -47,12 +47,12 @@ func TestResolveModel(t *testing.T) {
 	})
 
 	t.Run("reports availability of the resolved model", func(t *testing.T) {
-		m, err := resolveModel(available, "gpt-4", "")
+		m, err := resolveModel(available, "gpt-5.6-sol", "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if m.available {
-			t.Error("gpt-4 entry should be unavailable per the fixture")
+			t.Error("gpt-5.6-sol entry should be unavailable per the fixture")
 		}
 	})
 }
@@ -76,8 +76,7 @@ func modelsUnderProvider(out, provider string) []string {
 
 func TestFormatModelsByProvider(t *testing.T) {
 	found := []routeModel{
-		{name: "gpt-4", route: "chatgpt", available: false},
-		{name: "gemini-pro", route: "gemini", available: false},
+		{name: "gpt-5.6-sol", route: "codex", available: false},
 		{name: "gemini-3.6-flash-high", route: "antigravity", available: true},
 		{name: "claude-sonnet-4-6", route: "antigravity", available: true},
 		{name: "sonnet", route: "claude", available: true},
@@ -101,8 +100,8 @@ func TestFormatModelsByProvider(t *testing.T) {
 
 	t.Run("marks unavailable routes as not available", func(t *testing.T) {
 		openAI := modelsUnderProvider(out, "OpenAI")
-		if !containsPrefix(openAI, "- gpt-4 (via chatgpt, not available)") {
-			t.Errorf("expected gpt-4 marked not available, got: %v", openAI)
+		if !containsPrefix(openAI, "- gpt-5.6-sol (via codex, not available)") {
+			t.Errorf("expected gpt-5.6-sol marked not available, got: %v", openAI)
 		}
 	})
 
@@ -149,7 +148,7 @@ func TestParseDefaultProviderModel(t *testing.T) {
 		wantModel    string
 		wantProvider string
 	}{
-		{"unset falls back to openai/gpt-4", "", "gpt-4", "openai"},
+		{"unset falls back to openai/gpt-5.6-sol", "", codexModel, "openai"},
 		{"provider/model splits on first slash", "google/gemini-3.6-flash-high", "gemini-3.6-flash-high", "google"},
 		{"anthropic model", "anthropic/sonnet", "sonnet", "anthropic"},
 		{"no slash is treated as a bare model, no provider constraint", "sonnet", "sonnet", ""},
