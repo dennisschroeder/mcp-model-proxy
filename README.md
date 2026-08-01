@@ -49,14 +49,14 @@ Add an entry to Claude Desktop's `claude_desktop_config.json` (or Claude Code's 
     "mcp-model-proxy": {
       "command": "/absolute/path/to/mcp-model-proxy",
       "env": {
-        "MCP_MODEL": "chatgpt"
+        "DEFAULT_PROVIDER_MODEL": "openai/gpt-4"
       }
     }
   }
 }
 ```
 
-`MCP_MODEL` sets the default route used when `ask_model` is called without an explicit `model` — one of `chatgpt`, `gemini`, `antigravity`, `claude`, `codex`. It's optional; it defaults to `chatgpt`. Any call can override it per-request regardless (see below), so this only matters if you want a different default.
+`DEFAULT_PROVIDER_MODEL` sets the default model used when `ask_model` is called without an explicit `model`/`provider`. Syntax: `provider/model` (e.g. `google/gemini-3.6-flash-high`, `anthropic/sonnet`, `openai/gpt-4`) — see `list_models` for the exact provider and model names currently available. It's optional; it defaults to `openai/gpt-4`. Any call can override it per-request regardless (see below), so this only matters if you want a different default.
 
 Restart Claude Desktop/Code after editing the config.
 
@@ -74,7 +74,7 @@ No arguments. Returns the live catalog of models grouped by provider, with each 
 }
 ```
 - `message` (required) — the prompt to send.
-- `model` (optional) — a specific model name from `list_models`. Omit to use the server's configured default route (`MCP_MODEL`).
+- `model` (optional) — a specific model name from `list_models`. Omit to use the server's configured default (`DEFAULT_PROVIDER_MODEL`).
 - `provider` (optional) — a cross-check: if set, `model` must belong to this provider, or the call fails with an explicit mismatch error instead of silently routing somewhere unexpected. Requires `model` to also be set.
 
 Dependency checks are lazy — a missing/unauthenticated CLI tool only produces an error at call time (with install instructions), not at server startup.

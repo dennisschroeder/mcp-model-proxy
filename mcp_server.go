@@ -14,9 +14,10 @@ import (
 
 // MCPServer wraps the SDK server with this proxy's model-routing state.
 type MCPServer struct {
-	checker *ToolChecker
-	model   string // configured default route (chatgpt, gemini, antigravity, claude, codex)
-	server  *mcp.Server
+	checker         *ToolChecker
+	defaultModel    string // model used when ask_model's `model` arg is omitted
+	defaultProvider string // cross-checked against defaultModel, same as ask_model's optional `provider` arg
+	server          *mcp.Server
 }
 
 // Model names for the single-model direct routes, defined once so their
@@ -36,17 +37,14 @@ var claudeModels = []string{"sonnet", "opus", "fable"}
 // (jsonschema tags below), and input validation happens before the
 // handler ever runs.
 func NewMCPServer(checker *ToolChecker) *MCPServer {
-	model := os.Getenv("MCP_MODEL")
-	if model == "" {
-		model = "chatgpt"
-	}
+	defaultModel, defaultProvider := parseDefaultProviderModel(os.Getenv("DEFAULT_PROVIDER_MODEL"))
 
-	s := &MCPServer{checker: checker, model: model}
+	s := &MCPServer{checker: checker, defaultModel: defaultModel, defaultProvider: defaultProvider}
 	s.server = mcp.NewServer(&mcp.Implementation{Name: "mcp-model-proxy", Version: "1.0.0"}, nil)
 
 	mcp.AddTool(s.server, &mcp.Tool{
 		Name:        "ask_model",
-		Description: fmt.Sprintf("Send a message to a model and get a response. Defaults to the configured %s route; pass model (see list_models) to use a specific model instead", s.model),
+		Description: fmt.Sprintf("Send a message to a model and get a response. Defaults to %s (see DEFAULT_PROVIDER_MODEL); pass model (see list_models) to use a specific model instead", defaultModelLabel(defaultProvider, defaultModel)),
 	}, s.handleAskModel)
 
 	mcp.AddTool(s.server, &mcp.Tool{
@@ -62,6 +60,32 @@ func (s *MCPServer) Run(ctx context.Context) error {
 	return s.server.Run(ctx, &mcp.StdioTransport{})
 }
 
+// parseDefaultProviderModel parses DEFAULT_PROVIDER_MODEL's "provider/model"
+// syntax (e.g. "google/gemini-3.6-flash-high", "anthropic/sonnet") into the
+// same (model, provider) shape resolveModel already expects. A value with no
+// "/" is treated as a model name with no provider constraint — the same
+// leniency ask_model's own optional provider argument has. Unset falls back
+// to openai/gpt-4.
+func parseDefaultProviderModel(val string) (model, provider string) {
+	if val == "" {
+		return chatGPTModel, "openai"
+	}
+	provider, model, found := strings.Cut(val, "/")
+	if !found {
+		return val, ""
+	}
+	return model, provider
+}
+
+// defaultModelLabel renders the configured default as it appears in
+// DEFAULT_PROVIDER_MODEL syntax, for the ask_model tool description.
+func defaultModelLabel(provider, model string) string {
+	if provider == "" {
+		return model
+	}
+	return provider + "/" + model
+}
+
 // AskModelInput is ask_model's input; the SDK infers its JSON schema from
 // these fields (required unless the json tag has omitempty).
 type AskModelInput struct {
@@ -72,8 +96,11 @@ type AskModelInput struct {
 
 // handleAskModel processes model queries with lazy dependency checking.
 // If input.Model is set, it's resolved against availableModels() and
-// routed automatically — overriding the server's configured default route
-// for this call only. Otherwise falls back to the configured route.
+// routed for this call only, overriding the server's configured default.
+// Otherwise it falls back to defaultModel/defaultProvider (DEFAULT_PROVIDER_MODEL).
+// Either way, resolution and dispatch go through askModelOverride, so a
+// misconfigured default fails the same way a bad per-call override would:
+// a tool-level error naming the problem, not a startup crash.
 //
 // A non-nil returned error is a tool-level failure: the SDK packs it into
 // CallToolResult.Content with IsError set, so the caller sees the message
@@ -91,21 +118,7 @@ func (s *MCPServer) handleAskModel(ctx context.Context, req *mcp.CallToolRequest
 		return s.askModelOverride(input.Model, input.Provider, input.Message)
 	}
 
-	if !s.isKnownModel(s.model) {
-		return nil, nil, fmt.Errorf("unknown model configured: %s", s.model)
-	}
-
-	// Lazy dependency check — only when model is actually invoked
-	if err := s.checkDependency(s.model); err != nil {
-		return nil, nil, err
-	}
-
-	response, err := s.callModel(input.Message)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return textResult(response), nil, nil
+	return s.askModelOverride(s.defaultModel, s.defaultProvider, input.Message)
 }
 
 // resolveModel finds the entry in available named name. If provider is
@@ -258,13 +271,12 @@ func formatModelsByProvider(found []routeModel) string {
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-// routeInfo pairs an MCP_MODEL route's required CLI tool key (checker.go
-// looks up install instructions by this key) with its dispatch function.
-// A route is a CLI tool this proxy talks to (chatgpt→openai, gemini→gcloud,
-// antigravity→agy) — NOT itself a provider name (see routeProvider).
-// This is the single source of truth for which routes exist — isKnownModel,
-// checkDependency, and callModel all derive from it, so a route can't be
-// "known" to one and unroutable in another.
+// routeInfo pairs a route's required CLI tool key (checker.go looks up
+// install instructions by this key) with its dispatch function. A route is
+// a CLI tool this proxy talks to (chatgpt→openai, gemini→gcloud,
+// antigravity→agy) — NOT itself a provider name (see routeProvider). This
+// is the single source of truth for which routes exist — availableModels
+// and askModelOverride both derive from it.
 type routeInfo struct {
 	tool string
 	call func(*MCPServer, string) (string, error)
@@ -276,33 +288,6 @@ var routes = map[string]routeInfo{
 	"antigravity": {tool: "antigravity", call: (*MCPServer).callAntigravity},
 	"claude":      {tool: "claude", call: (*MCPServer).callClaude},
 	"codex":       {tool: "codex", call: (*MCPServer).callCodex},
-}
-
-// isKnownModel reports whether model is one of the supported routes
-func (s *MCPServer) isKnownModel(model string) bool {
-	_, ok := routes[strings.ToLower(model)]
-	return ok
-}
-
-// checkDependency validates a specific route's dependencies
-func (s *MCPServer) checkDependency(model string) error {
-	m, ok := routes[strings.ToLower(model)]
-	if !ok {
-		return fmt.Errorf("unknown model: %s", model)
-	}
-	if !s.checker.IsAvailable(m.tool) {
-		return errors.New(s.checker.UnavailableMessage(m.tool))
-	}
-	return nil
-}
-
-// callModel routes the message via the configured route
-func (s *MCPServer) callModel(message string) (string, error) {
-	m, ok := routes[strings.ToLower(s.model)]
-	if !ok {
-		return "", fmt.Errorf("unknown model: %s", s.model)
-	}
-	return m.call(s, message)
 }
 
 // callChatGPT sends a message to OpenAI's ChatGPT via openai CLI

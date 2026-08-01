@@ -142,24 +142,26 @@ func containsPrefix(lines []string, prefix string) bool {
 	return false
 }
 
-func TestIsKnownModel(t *testing.T) {
-	s := &MCPServer{}
-
-	cases := map[string]bool{
-		"chatgpt":     true,
-		"gemini":      true,
-		"antigravity": true,
-		"claude":      true,
-		"codex":       true,
-		"CHATGPT":     true, // case-insensitive
-		"not-a-route": false,
-		"":            false,
+func TestParseDefaultProviderModel(t *testing.T) {
+	cases := []struct {
+		name         string
+		val          string
+		wantModel    string
+		wantProvider string
+	}{
+		{"unset falls back to openai/gpt-4", "", "gpt-4", "openai"},
+		{"provider/model splits on first slash", "google/gemini-3.6-flash-high", "gemini-3.6-flash-high", "google"},
+		{"anthropic model", "anthropic/sonnet", "sonnet", "anthropic"},
+		{"no slash is treated as a bare model, no provider constraint", "sonnet", "sonnet", ""},
 	}
 
-	for model, want := range cases {
-		if got := s.isKnownModel(model); got != want {
-			t.Errorf("isKnownModel(%q) = %v, want %v", model, got, want)
-		}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			model, provider := parseDefaultProviderModel(c.val)
+			if model != c.wantModel || provider != c.wantProvider {
+				t.Errorf("parseDefaultProviderModel(%q) = (%q, %q), want (%q, %q)", c.val, model, provider, c.wantModel, c.wantProvider)
+			}
+		})
 	}
 }
 
