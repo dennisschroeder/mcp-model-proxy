@@ -101,7 +101,7 @@ func (tc *ToolChecker) checkTool(tool *Tool) error {
 }
 
 // IsAvailable runs a live check for whether a tool is installed and in PATH.
-// checkDependency calls this lazily (per the "validate on invocation, not on
+// Callers use this lazily, per call (per the "validate on invocation, not on
 // startup" design), so it can't rely on ValidateAll() having run first.
 func (tc *ToolChecker) IsAvailable(name string) bool {
 	tool, ok := tc.tools[name]
