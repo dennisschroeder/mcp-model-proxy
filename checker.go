@@ -17,7 +17,6 @@ type Tool struct {
 	BinaryName   string
 	VersionCmd   []string // command to check version/availability
 	Installation string   // installation instructions
-	IsAvailable  bool
 }
 
 // NewToolChecker creates a new tool checker
@@ -76,16 +75,14 @@ Then run: codex login`,
 func (tc *ToolChecker) ValidateAll() error {
 	var errors []string
 
-	for key, tool := range tc.tools {
+	for _, tool := range tc.tools {
 		if err := tc.checkTool(tool); err != nil {
 			errors = append(errors, fmt.Sprintf("\n❌ %s (%s):\n   %s\n   %s", tool.Name, tool.BinaryName, err, tool.Installation))
-		} else {
-			tc.tools[key].IsAvailable = true
 		}
 	}
 
 	if len(errors) > 0 {
-		return fmt.Errorf("Missing required tools:%s", strings.Join(errors, ""))
+		return fmt.Errorf("missing required tools:%s", strings.Join(errors, ""))
 	}
 
 	return nil
@@ -114,7 +111,6 @@ func (tc *ToolChecker) IsAvailable(name string) bool {
 	if err := tc.checkTool(tool); err != nil {
 		return false
 	}
-	tool.IsAvailable = true
 	return true
 }
 

@@ -42,7 +42,7 @@ func NewMCPServer(checker *ToolChecker) *MCPServer {
 	}
 
 	s := &MCPServer{checker: checker, model: model}
-	s.server = mcp.NewServer(&mcp.Implementation{Name: "mcp-model-proxy", Version: "0.3.0"}, nil)
+	s.server = mcp.NewServer(&mcp.Implementation{Name: "mcp-model-proxy", Version: "1.0.0"}, nil)
 
 	mcp.AddTool(s.server, &mcp.Tool{
 		Name:        "ask_model",
@@ -314,9 +314,9 @@ func (s *MCPServer) callChatGPT(message string) (string, error) {
 	if err != nil {
 		outputStr := string(output)
 		if strings.Contains(outputStr, "OPENAI_API_KEY") || strings.Contains(outputStr, "authentication") {
-			return "", fmt.Errorf("Authentication failed: OPENAI_API_KEY not set or invalid")
+			return "", fmt.Errorf("authentication failed: OPENAI_API_KEY not set or invalid")
 		}
-		return "", fmt.Errorf("ChatGPT call failed: %w", err)
+		return "", fmt.Errorf("chatgpt call failed: %w", err)
 	}
 
 	return string(output), nil
@@ -332,7 +332,7 @@ func (s *MCPServer) callGemini(message string) (string, error) {
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("Gemini call failed: %w", err)
+		return "", fmt.Errorf("gemini call failed: %w", err)
 	}
 
 	return string(output), nil
@@ -343,7 +343,7 @@ func (s *MCPServer) callAntigravity(message string) (string, error) {
 	cmd := exec.Command("agy", "--print", message)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("Antigravity call failed: %w", err)
+		return "", fmt.Errorf("antigravity call failed: %w", err)
 	}
 
 	return string(output), nil
@@ -355,7 +355,7 @@ func (s *MCPServer) callAntigravityWithModel(model, message string) (string, err
 	cmd := exec.Command("agy", "--model", model, "--print", message)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("Antigravity call failed: %w", err)
+		return "", fmt.Errorf("antigravity call failed: %w", err)
 	}
 
 	return string(output), nil
@@ -378,7 +378,7 @@ func (s *MCPServer) callClaude(message string) (string, error) {
 	cmd := exec.Command("claude", "-p", message)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("Claude call failed: %w", err)
+		return "", fmt.Errorf("claude call failed: %w", err)
 	}
 
 	return string(output), nil
@@ -390,7 +390,7 @@ func (s *MCPServer) callClaudeWithModel(model, message string) (string, error) {
 	cmd := exec.Command("claude", "--model", model, "-p", message)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("Claude call failed: %w", err)
+		return "", fmt.Errorf("claude call failed: %w", err)
 	}
 
 	return string(output), nil
@@ -403,7 +403,7 @@ func (s *MCPServer) callCodex(message string) (string, error) {
 	cmd := exec.Command("codex", "exec", "--skip-git-repo-check", message)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("Codex call failed: %w", err)
+		return "", fmt.Errorf("codex call failed: %w", err)
 	}
 
 	return string(output), nil

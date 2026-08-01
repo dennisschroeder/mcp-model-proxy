@@ -1,4 +1,4 @@
-module mcp-model-proxy
+module github.com/dennisschroeder/mcp-model-proxy
 
 go 1.26.5
 
