@@ -1,6 +1,6 @@
 # MCP Model Proxy
 
-A Go MCP server that lets Claude Code / Claude Desktop delegate a prompt to another LLM provider — OpenAI, Google, or Anthropic — by proxying through that provider's own CLI tool.
+A Go MCP server that lets any MCP-compatible client — Claude Code, Claude Desktop, opencode, or any other MCP-aware CLI/harness — delegate a prompt to another LLM provider — OpenAI, Google, or Anthropic — by proxying through that provider's own CLI tool.
 
 It's a dumb proxy by design: it doesn't inspect or rewrite the message you send it, it just routes it to the CLI tool for the model you asked for and returns the raw output.
 
@@ -12,18 +12,14 @@ It's a dumb proxy by design: it doesn't inspect or rewrite the message you send 
 - **Anthropic** — Claude models: `sonnet`, `opus`, `fable` (via the `claude` CLI)
 - **OpenAI** — GPT models (via the `openai` CLI), plus Codex's own model (via the `codex` CLI)
 
-Which underlying CLI tool backs a given model is an implementation detail, exposed for transparency in `list_models`' output (e.g. `sonnet (via claude, available)`) — you address models and providers, not tool names.
-
 ## Prerequisites
 
 The MCP server itself has no dependencies beyond Go to build it. Each provider's models, however, require their underlying CLI tool to be **installed and authenticated, and on the same `PATH` the MCP server process runs with.** This last part is a common gotcha for GUI-launched apps like Claude Desktop, whose PATH can differ from your login shell's — if a tool works in your terminal but `list_models` still reports it unavailable, check what PATH the Claude Desktop process actually sees.
 
-You don't need all five installed — only install the ones for the providers you want to use. `list_models` will report the rest as unavailable with install instructions.
+You don't need all three installed — only install the ones for the providers you want to use. `list_models` will report the rest as unavailable with install instructions.
 
 | Tool | Provider route | Install |
 |---|---|---|
-| `openai` | OpenAI (GPT) | `pip install openai`, then `export OPENAI_API_KEY=sk-...` — [docs](https://developers.openai.com/api/docs/libraries/openai-cli) |
-| `gcloud` | Google (Gemini) | [cloud.google.com/sdk/docs/install](https://cloud.google.com/sdk/docs/install), then `gcloud auth application-default login` |
 | `agy` (Google Antigravity CLI) | Google (Gemini via Antigravity) | [antigravity.google/docs/cli/install](https://antigravity.google/docs/cli/install) — note the binary installs as `agy`, not `antigravity-cli` |
 | `claude` (Claude Code CLI) | Anthropic (Claude) | [code.claude.com/docs](https://code.claude.com/docs/en/overview), or `npm install -g @anthropic-ai/claude-code` |
 | `codex` (OpenAI Codex CLI) | OpenAI (Codex) | [developers.openai.com/codex/cli](https://developers.openai.com/codex/cli), or `brew install --cask codex`, then `codex login` |
