@@ -1,63 +1,23 @@
 package main
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"sort"
 	"strings"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// MCPServer handles MCP protocol communication with proper tool registration
+// MCPServer wraps the SDK server with this proxy's model-routing state.
 type MCPServer struct {
 	checker *ToolChecker
-	model   string // selected model (chatgpt, gemini, antigravity)
+	model   string // configured default route (chatgpt, gemini, antigravity, claude, codex)
+	server  *mcp.Server
 }
-
-// MCPMessage represents a message in the MCP protocol
-type MCPMessage struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      interface{}     `json:"id,omitempty"`
-	Method  string          `json:"method,omitempty"`
-	Params  json.RawMessage `json:"params,omitempty"`
-	Result  interface{}     `json:"result,omitempty"`
-	Error   interface{}     `json:"error,omitempty"`
-}
-
-// MCPTool represents an MCP tool definition
-type MCPTool struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	InputSchema map[string]interface{} `json:"inputSchema"`
-}
-
-// TextContent represents text content in MCP
-type TextContent struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-}
-
-// JSON-RPC 2.0 standard error codes (error.code must be an integer per spec)
-const (
-	ParseError     = -32700
-	MethodNotFound = -32601
-	InvalidParams  = -32602
-	InternalError  = -32603
-)
-
-// Server-defined error codes (JSON-RPC reserves -32000 to -32099 for these).
-// Distinct from InternalError so Claude Code can tell "fix your environment"
-// (DependencyMissing) apart from "retry or switch provider" (ModelCallFailed).
-const (
-	DependencyMissing = -32001
-	ModelCallFailed   = -32002
-	ToolNotFound      = -32003
-)
 
 // Model names for the single-model direct routes, defined once so their
 // call* functions and handleListModels/availableModels can't drift apart.
@@ -71,183 +31,81 @@ const (
 // claudeModels[0] is the default used when a call doesn't override the model.
 var claudeModels = []string{"sonnet", "opus", "fable"}
 
-// NewMCPServer creates a new MCP server
+// NewMCPServer creates a new MCP server and registers its tools. Tool
+// input schemas are inferred by the SDK from the handler's input struct
+// (jsonschema tags below), and input validation happens before the
+// handler ever runs.
 func NewMCPServer(checker *ToolChecker) *MCPServer {
 	model := os.Getenv("MCP_MODEL")
 	if model == "" {
 		model = "chatgpt"
 	}
 
-	return &MCPServer{
-		checker: checker,
-		model:   model,
-	}
+	s := &MCPServer{checker: checker, model: model}
+	s.server = mcp.NewServer(&mcp.Implementation{Name: "mcp-model-proxy", Version: "0.3.0"}, nil)
+
+	mcp.AddTool(s.server, &mcp.Tool{
+		Name:        "ask_model",
+		Description: fmt.Sprintf("Send a message to a model and get a response. Defaults to the configured %s route; pass model (see list_models) to use a specific model instead", s.model),
+	}, s.handleAskModel)
+
+	mcp.AddTool(s.server, &mcp.Tool{
+		Name:        "list_models",
+		Description: "List concrete models grouped by actual provider, which route reaches each, and whether that route is currently available",
+	}, s.handleListModels)
+
+	return s
 }
 
-// Run starts the MCP server and listens for messages
+// Run starts the MCP server on stdio.
 func (s *MCPServer) Run(ctx context.Context) error {
-	scanner := bufio.NewScanner(os.Stdin)
-	encoder := json.NewEncoder(os.Stdout)
-
-	log.Printf("MCP Server started with model: %s", s.model)
-
-	for scanner.Scan() {
-		line := scanner.Bytes()
-
-		var msg MCPMessage
-		if err := json.Unmarshal(line, &msg); err != nil {
-			s.sendError(encoder, nil, ParseError, err)
-			continue
-		}
-
-		switch msg.Method {
-		case "initialize":
-			s.handleInitialize(encoder, msg.ID)
-		case "tools/list":
-			s.handleListTools(encoder, msg.ID)
-		case "tools/call":
-			s.handleToolCall(encoder, msg.ID, msg.Params)
-		default:
-			s.sendError(encoder, msg.ID, MethodNotFound, fmt.Errorf("method %s not implemented", msg.Method))
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("scanner error: %w", err)
-	}
-
-	return nil
+	return s.server.Run(ctx, &mcp.StdioTransport{})
 }
 
-// handleInitialize responds to initialization with proper capabilities
-func (s *MCPServer) handleInitialize(encoder *json.Encoder, id interface{}) {
-	response := MCPMessage{
-		JSONRPC: "2.0",
-		ID:      id,
-		Result: map[string]interface{}{
-			"protocolVersion": "2024-11-05",
-			"capabilities": map[string]interface{}{
-				"tools": map[string]interface{}{},
-			},
-			"serverInfo": map[string]interface{}{
-				"name":    "mcp-model-proxy",
-				"version": "0.2.0",
-			},
-		},
-	}
-	encoder.Encode(response)
-}
-
-// handleListTools returns available tools
-func (s *MCPServer) handleListTools(encoder *json.Encoder, id interface{}) {
-	tools := []MCPTool{
-		{
-			Name:        "ask_model",
-			Description: fmt.Sprintf("Send a message to a model and get a response. Defaults to the configured %s route; pass model (see list_models) to use a specific model instead", s.model),
-			InputSchema: map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"message": map[string]interface{}{
-						"type":        "string",
-						"description": "The message to send to the model",
-					},
-					"model": map[string]interface{}{
-						"type":        "string",
-						"description": "Optional: a specific model name from list_models (e.g. \"gemini-3.6-flash-high\", \"claude-sonnet-4-6\", \"gpt-4\"). Determines routing automatically. Omit to use the configured default route.",
-					},
-					"provider": map[string]interface{}{
-						"type":        "string",
-						"description": "Optional cross-check: the provider (e.g. \"Google\", \"OpenAI\") the given model must belong to. Requires model to also be set.",
-					},
-				},
-				"required": []string{"message"},
-			},
-		},
-		{
-			Name:        "list_models",
-			Description: "List concrete models grouped by actual provider, which route reaches each, and whether that route is currently available",
-			InputSchema: map[string]interface{}{
-				"type":       "object",
-				"properties": map[string]interface{}{},
-			},
-		},
-	}
-
-	response := MCPMessage{
-		JSONRPC: "2.0",
-		ID:      id,
-		Result: map[string]interface{}{
-			"tools": tools,
-		},
-	}
-	encoder.Encode(response)
-}
-
-// handleToolCall processes tool calls from Claude
-func (s *MCPServer) handleToolCall(encoder *json.Encoder, id interface{}, params json.RawMessage) {
-	var callParams struct {
-		Name      string                 `json:"name"`
-		Arguments map[string]interface{} `json:"arguments"`
-	}
-
-	if err := json.Unmarshal(params, &callParams); err != nil {
-		s.sendError(encoder, id, InvalidParams, err)
-		return
-	}
-
-	switch callParams.Name {
-	case "ask_model":
-		s.handleAskModel(encoder, id, callParams.Arguments)
-	case "list_models":
-		s.handleListModels(encoder, id)
-	default:
-		s.sendError(encoder, id, ToolNotFound, fmt.Errorf("tool %s not found", callParams.Name))
-	}
+// AskModelInput is ask_model's input; the SDK infers its JSON schema from
+// these fields (required unless the json tag has omitempty).
+type AskModelInput struct {
+	Message  string `json:"message" jsonschema:"the message to send to the model"`
+	Model    string `json:"model,omitempty" jsonschema:"optional: a specific model name from list_models (e.g. gemini-3.6-flash-high, claude-sonnet-4-6, gpt-4); determines routing automatically; omit to use the configured default route"`
+	Provider string `json:"provider,omitempty" jsonschema:"optional cross-check: the provider (e.g. Google, OpenAI) the given model must belong to; requires model to also be set"`
 }
 
 // handleAskModel processes model queries with lazy dependency checking.
-// If args["model"] is set, it's resolved against availableModels() and
+// If input.Model is set, it's resolved against availableModels() and
 // routed automatically — overriding the server's configured default route
 // for this call only. Otherwise falls back to the configured route.
-func (s *MCPServer) handleAskModel(encoder *json.Encoder, id interface{}, args map[string]interface{}) {
-	message, ok := args["message"].(string)
-	if !ok || message == "" {
-		s.sendError(encoder, id, InvalidParams, fmt.Errorf("message required and must be a non-empty string"))
-		return
+//
+// A non-nil returned error is a tool-level failure: the SDK packs it into
+// CallToolResult.Content with IsError set, so the caller sees the message
+// and can self-correct, rather than a raw MCP protocol error.
+func (s *MCPServer) handleAskModel(ctx context.Context, req *mcp.CallToolRequest, input AskModelInput) (*mcp.CallToolResult, any, error) {
+	if input.Message == "" {
+		return nil, nil, fmt.Errorf("message required and must be a non-empty string")
 	}
 
-	model, hasModel := args["model"].(string)
-	provider, hasProvider := args["provider"].(string)
-
-	if hasProvider && provider != "" && (!hasModel || model == "") {
-		s.sendError(encoder, id, InvalidParams, fmt.Errorf("provider requires model to also be set"))
-		return
+	if input.Provider != "" && input.Model == "" {
+		return nil, nil, fmt.Errorf("provider requires model to also be set")
 	}
 
-	if hasModel && model != "" {
-		s.handleAskModelOverride(encoder, id, model, provider, message)
-		return
+	if input.Model != "" {
+		return s.askModelOverride(input.Model, input.Provider, input.Message)
 	}
 
 	if !s.isKnownModel(s.model) {
-		s.sendError(encoder, id, InternalError, fmt.Errorf("unknown model configured: %s", s.model))
-		return
+		return nil, nil, fmt.Errorf("unknown model configured: %s", s.model)
 	}
 
 	// Lazy dependency check — only when model is actually invoked
 	if err := s.checkDependency(s.model); err != nil {
-		s.sendError(encoder, id, DependencyMissing, err)
-		return
+		return nil, nil, err
 	}
 
-	// Call the model
-	response, err := s.callModel(message)
+	response, err := s.callModel(input.Message)
 	if err != nil {
-		s.sendError(encoder, id, ModelCallFailed, err)
-		return
+		return nil, nil, err
 	}
 
-	s.sendAskModelResult(encoder, id, response)
+	return textResult(response), nil, nil
 }
 
 // resolveModel finds the entry in available named name. If provider is
@@ -267,17 +125,15 @@ func resolveModel(available []routeModel, name, provider string) (*routeModel, e
 	return nil, fmt.Errorf("unknown model: %s (call list_models to see available models)", name)
 }
 
-// handleAskModelOverride routes a single ask_model call to a caller-chosen
-// model, resolved against the same catalog list_models reports from.
-func (s *MCPServer) handleAskModelOverride(encoder *json.Encoder, id interface{}, model, provider, message string) {
+// askModelOverride routes a single ask_model call to a caller-chosen model,
+// resolved against the same catalog list_models reports from.
+func (s *MCPServer) askModelOverride(model, provider, message string) (*mcp.CallToolResult, any, error) {
 	match, err := resolveModel(s.availableModels(), model, provider)
 	if err != nil {
-		s.sendError(encoder, id, InvalidParams, err)
-		return
+		return nil, nil, err
 	}
 	if !match.available {
-		s.sendError(encoder, id, DependencyMissing, errors.New(s.checker.UnavailableMessage(routes[match.route].tool)))
-		return
+		return nil, nil, errors.New(s.checker.UnavailableMessage(routes[match.route].tool))
 	}
 
 	var response string
@@ -290,28 +146,25 @@ func (s *MCPServer) handleAskModelOverride(encoder *json.Encoder, id interface{}
 		response, err = routes[match.route].call(s, message)
 	}
 	if err != nil {
-		s.sendError(encoder, id, ModelCallFailed, err)
-		return
+		return nil, nil, err
 	}
 
-	s.sendAskModelResult(encoder, id, response)
+	return textResult(response), nil, nil
 }
 
-// sendAskModelResult sends a successful ask_model response in MCP format.
-func (s *MCPServer) sendAskModelResult(encoder *json.Encoder, id interface{}, response string) {
-	result := MCPMessage{
-		JSONRPC: "2.0",
-		ID:      id,
-		Result: map[string]interface{}{
-			"content": []TextContent{
-				{
-					Type: "text",
-					Text: response,
-				},
-			},
-		},
-	}
-	encoder.Encode(result)
+// textResult wraps a plain-text response in an MCP tool result.
+func textResult(text string) *mcp.CallToolResult {
+	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}}
+}
+
+// ListModelsInput takes no arguments.
+type ListModelsInput struct{}
+
+// handleListModels reports, per provider, which concrete models this proxy
+// can reach and via which route — proxying antigravity's own model list
+// (`agy models`) rather than hardcoding it.
+func (s *MCPServer) handleListModels(ctx context.Context, req *mcp.CallToolRequest, input ListModelsInput) (*mcp.CallToolResult, any, error) {
+	return textResult(formatModelsByProvider(s.availableModels())), nil, nil
 }
 
 // routeModel is one concrete model reachable through a given route, and
@@ -335,7 +188,7 @@ var routeProvider = map[string]string{
 
 // availableModels enumerates every concrete model this proxy can currently
 // reach, across all routes. Shared by handleListModels and
-// handleAskModelOverride so both resolve models against the same catalog.
+// askModelOverride so both resolve models against the same catalog.
 func (s *MCPServer) availableModels() []routeModel {
 	var found []routeModel
 
@@ -403,22 +256,6 @@ func formatModelsByProvider(found []routeModel) string {
 	}
 
 	return strings.TrimRight(sb.String(), "\n")
-}
-
-// handleListModels reports, per provider, which concrete models this proxy
-// can reach and via which route — proxying antigravity's own model list
-// (`agy models`) rather than hardcoding it.
-func (s *MCPServer) handleListModels(encoder *json.Encoder, id interface{}) {
-	result := MCPMessage{
-		JSONRPC: "2.0",
-		ID:      id,
-		Result: map[string]interface{}{
-			"content": []TextContent{
-				{Type: "text", Text: formatModelsByProvider(s.availableModels())},
-			},
-		},
-	}
-	encoder.Encode(result)
 }
 
 // routeInfo pairs an MCP_MODEL route's required CLI tool key (checker.go
@@ -570,18 +407,4 @@ func (s *MCPServer) callCodex(message string) (string, error) {
 	}
 
 	return string(output), nil
-}
-
-// sendError sends a properly formatted MCP error response
-// Per JSON-RPC 2.0 spec, error.code must be an integer, not a string.
-func (s *MCPServer) sendError(encoder *json.Encoder, id interface{}, code int, err error) {
-	response := MCPMessage{
-		JSONRPC: "2.0",
-		ID:      id,
-		Error: map[string]interface{}{
-			"code":    code,
-			"message": err.Error(),
-		},
-	}
-	encoder.Encode(response)
 }
