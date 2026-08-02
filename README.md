@@ -4,6 +4,15 @@ A Go MCP server that lets any MCP-compatible client — Claude Code, Claude Desk
 
 It's a dumb proxy by design: it doesn't inspect or rewrite the message you send it, it just routes it to the CLI tool for the model you asked for and returns the raw output.
 
+## Why this exists
+
+I wanted one coding tool that could tap Google Gemini's free tier without hitting the thin rate limits of a raw Google AI Studio API key. It turns out the same models are far less rate-limited when accessed through Google's own agentic CLI (Antigravity/`agy`) than through a plain API key plugged into a third-party tool — but that meant switching tools just to get better limits. `mcp-model-proxy` fixes that: authenticate each provider's own CLI once, and any MCP-compatible client can reach all of them through one interface, without giving up whatever quota that provider's first-party tool gets you.
+
+Other reasons you might want this:
+- **One client, multiple providers** — stop juggling a separate integration/API key per provider in every tool you use; delegate to whichever is authenticated and available.
+- **Model comparison** — ask the same question across OpenAI, Google, and Anthropic models in one session to compare answers.
+- **Fallback when one provider is down or rate-limited** — switch models mid-session via `ask_model`'s `model`/`provider` args instead of reconfiguring a client.
+
 ## Providers
 
 `list_models` reports, live, which models this proxy can currently reach — grouped by provider, with each model's availability determined by whether its underlying CLI tool is installed and authenticated:
